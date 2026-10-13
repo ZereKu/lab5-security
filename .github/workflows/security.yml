@@ -1,0 +1,63 @@
+
+name: Security Tests
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+    branches: [main]
+
+jobs:
+  security:
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+
+      - name: Setup Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+
+      - name: Install dependencies
+        run: pip install -r requirements.txt
+
+      - name: Run Bandit
+        run: |
+          bandit -r app.py -f txt -o bandit_report.txt || true
+
+      - name: Start Flask API
+        run: |
+          python app.py > flask.log 2>&1 &
+          for i in $(seq 1 30); do
+            if curl -fsS http://127.0.0.1:5000/api/users; then
+              exit 0
+            fi
+            sleep 1
+          done
+          cat flask.log
+          exit 1
+
+      - name: Run OWASP ZAP
+        run: |
+          docker run --rm \
+            --network host \
+            -v "$PWD:/zap/wrk/:rw" \
+            ghcr.io/zaproxy/zaproxy:stable \
+            zap-baseline.py \
+            -t http://127.0.0.1:5000/api/users \
+            -r zap_report.html \
+            -I
+
+      - name: Upload reports
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: security-reports
+          path: |
+            bandit_report.txt
+            zap_report.html
+            flask.log
+          if-no-files-found: warn
+git add .
